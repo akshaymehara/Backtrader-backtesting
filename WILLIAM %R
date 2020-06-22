@@ -1,0 +1,116 @@
+import datetime
+from collections import OrderedDict
+import backtrader as bt
+import backtrader.feeds as btfeeds
+import talib
+			   
+
+class mystrategy(bt.SignalStrategy):
+	def log(self, txt, dt = None):
+		dt = dt or self.datas[0].datetime.date(0)
+		print("%s, %s" % (dt, txt))
+
+	def __init__(self):
+		self.dataclose = self.datas[0].close
+		self.order = None
+		self.buyprice = None
+		self.buycomm = None
+
+		self.william = bt.talib.WILLR(self.data.high, self.data.low,self.data.close, period = 14)
+
+	def notify_order(self, order):
+		if order.status in [order.Submitted, order.Accepted]:
+			return
+		if order.status in [order.Completed]:
+			if order.isbuy():
+				self.log("Buy executed, price %.2f, cost %.2f, comm %.2f" % (order.executed.price, order.executed.value, order.executed.comm))
+				self.buyprice = order.executed.price
+				self.buycomm = order.executed.comm
+			else:
+				self.log("Sell executed, price %.2f, cost %.2f, comm %.2f" % (order.executed.price, order.executed.value, order.executed.comm))
+			self.bar_executed = len(self)
+
+		elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+			self.log("order Canceled/Margin/Rejected")
+		self.order = None
+
+	def notify_trade(self, trade):
+		if not trade.isclosed:
+			return
+		self.log("Operation profit , gross %.2f, net %.2f" % (trade.pnl, trade.pnlcomm))
+		
+	def next(self):
+		self.log("Close, %.2f" % self.dataclose[0])
+		if self.order:
+			return
+		if not self.position:
+			if self.william < -90:
+				self.log("Buy Create, %.2f" % self.dataclose[0])
+				self.order = self.buy()
+		else:
+			if self.william > -20 :
+				self.log("Sell Create, %.2f" % self.dataclose[0])
+				self.order = self.sell()
+
+def printTradeAnalysis(analyzer):
+	total_open = analyzer.total.open
+	total_closed = analyzer.total.closed
+	total_won = analyzer.won.total
+	total_lost = analyzer.lost.total
+	win_streak = analyzer.streak.won.longest
+	lost_streak = analyzer.streak.lost.longest
+	pnl_net = round(analyzer.pnl.net.total,2)
+	strike_rate = (total_won/total_closed)*100
+
+	h1 = ["Total Open", "Total Closed", "Total Won", "Total Lost"]
+	h2 = ["Strike Rate", "Win Streak", "Losing Streak", "PnL Net"]
+	r1 = [total_open, total_closed, total_won, total_lost]
+	r2 = [strike_rate, win_streak, lost_streak, pnl_net]
+	if len(h1) > len(h2):
+		header_length = len(h1)
+	else:
+		header_length = len(h2)
+
+	print_list = [h1,r1,h2,r2]
+	row_format = "{:<15}" * (header_length+1)
+	print("Trade Analysis Results:")
+	for row in print_list:
+		print(row_format.format("", *row))
+def printSQN(analyzer):
+	sqn = round(analyzer.sqn, 2)
+	print("SQN:{}".format(sqn))
+
+if __name__ == "__main__":
+	cerebro = bt.Cerebro()
+	cerebro.addstrategy(mystrategy)
+
+	data = btfeeds.GenericCSVData(
+		dataname='axisbank.csv',
+		nullvalue=0.0,
+		dtformat=('%Y-%m-%d'),
+		datetime=0,
+		high=5,
+		low=6,
+		open=4,
+		close=8,
+		volume=10,
+		openinterest=-1,
+		)
+
+	cerebro.adddata(data)
+	startcash = 100000
+	cerebro.broker.setcash(startcash)
+	cerebro.addsizer(bt.sizers.FixedSize, stake = 100)
+	cerebro.broker.setcommission(commission = 0.0)
+
+	cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name = "ta")
+	cerebro.addanalyzer(bt.analyzers.SQN, _name = "sqn")
+	print("Starting Portfolio Value: %.2f" % cerebro.broker.getvalue())
+	strategies = cerebro.run()
+	firstStrat = strategies[0]
+
+	printTradeAnalysis(firstStrat.analyzers.ta.get_analysis())
+	printSQN(firstStrat.analyzers.sqn.get_analysis())
+
+	print("Final Portfolio Value: %.2f" % cerebro.broker.getvalue())
+	cerebro.plot(style = "candlestick")
